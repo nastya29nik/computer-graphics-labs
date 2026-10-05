@@ -1,4 +1,16 @@
-# 🌋 Vulkan Starter App
+# 🌋 Computer Graphics Lab 1: Torus Rendering
+
+An interactive 3D application built with **Vulkan**, **GLFW**, and **Dear ImGui**.
+
+### Features
+- **Procedural 3D Geometry**: Parametric Torus generation with smooth vertex coloring based on local surface angles.
+- **Dynamic Projections**: Real-time switching between **Perspective** and **Orthographic** view volumes.
+- **Affine Transformations**: Interactive GUI controls for object Position, Rotation, and Scale.
+- **Complex Trajectory & Animation**: Circular path motion and continuous rotation with adjustable speed, radius, and Play/Pause controls.
+- **Color Manipulation**: Interactive base color blending via `ImGui::ColorEdit3` combined with per-vertex colors in the vertex shader.
+- **Multiple Objects & Descriptor Sets**: Simultaneous rendering of multiple animated objects using distinct `VkDescriptorSet` instances and independent uniform buffers.
+
+---
 
 ## Getting started
 
