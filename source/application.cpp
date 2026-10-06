@@ -24,24 +24,74 @@ struct GlobalUniforms {
     glm::vec4 base_color;
 };
 
+struct Buffer {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VmaAllocation allocation = VK_NULL_HANDLE;
+    void* mapped_data = nullptr;
+
+    bool create(VkDeviceSize size, VkBufferUsageFlags usage, bool map_memory = false) {
+        auto& context = graphics::internal::context;
+
+        VkBufferCreateInfo buffer_info = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size = size,
+            .usage = usage,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        };
+
+        const VmaAllocationCreateInfo alloc_info = {
+            .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                     (map_memory ? VMA_ALLOCATION_CREATE_MAPPED_BIT : 0u),
+            .usage = VMA_MEMORY_USAGE_AUTO,
+        };
+
+        VmaAllocationInfo result_info{};
+        if (vmaCreateBuffer(context.allocator, &buffer_info, &alloc_info,
+            &buffer, &allocation, &result_info) != VK_SUCCESS) {
+            std::cerr << "Failed to allocate Vulkan buffer\n";
+            return false;
+        }
+
+        if (map_memory) {
+            mapped_data = result_info.pMappedData;
+        }
+        return true;
+    }
+
+    void upload(const void* data, size_t size) {
+        auto& context = graphics::internal::context;
+        if (mapped_data) {
+            std::memcpy(mapped_data, data, size);
+        }
+        else {
+            void* staging = nullptr;
+            vmaMapMemory(context.allocator, allocation, &staging);
+            std::memcpy(staging, data, size);
+            vmaUnmapMemory(context.allocator, allocation);
+        }
+    }
+
+    void destroy() {
+        auto& context = graphics::internal::context;
+        if (buffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(context.allocator, buffer, allocation);
+            buffer = VK_NULL_HANDLE;
+            allocation = VK_NULL_HANDLE;
+            mapped_data = nullptr;
+        }
+    }
+};
+
 std::vector<Vertex> torusVertices;
 std::vector<uint32_t> torusIndices;
 
-VkBuffer vk_vertex_buffer = VK_NULL_HANDLE;
-VmaAllocation vk_vertex_buffer_allocation = VK_NULL_HANDLE;
+Buffer vertex_buffer;
+Buffer index_buffer;
+Buffer uniform_buffer1;
+Buffer uniform_buffer2;
 
-VkBuffer vk_index_buffer = VK_NULL_HANDLE;
-VmaAllocation vk_index_buffer_allocation = VK_NULL_HANDLE;
-
-VkBuffer vk_uniform_buffer1 = VK_NULL_HANDLE;
-VmaAllocation vk_uniform_buffer_allocation1 = VK_NULL_HANDLE;
-void* mapped_uniform_data1 = nullptr;
-VkDescriptorSet descriptor_set1;
-
-VkBuffer vk_uniform_buffer2 = VK_NULL_HANDLE;
-VmaAllocation vk_uniform_buffer_allocation2 = VK_NULL_HANDLE;
-void* mapped_uniform_data2 = nullptr;
-VkDescriptorSet descriptor_set2;
+VkDescriptorSet descriptor_set1 = VK_NULL_HANDLE;
+VkDescriptorSet descriptor_set2 = VK_NULL_HANDLE;
 
 VkDescriptorSetLayout descriptor_set_layout;
 VkDescriptorPool descriptor_pool;
@@ -53,6 +103,10 @@ float torus_position[3] = { 0.0f, 0.0f, -3.0f };
 float torus_rotation[3] = { 0.0f, 0.0f, 0.0f };
 float torus_scale[3] = { 1.0f, 1.0f, 1.0f };
 float torus_color[3] = { 1.0f, 1.0f, 1.0f };
+
+float torus2_position[3] = { 1.8f, 0.0f, -3.0f };
+float torus2_scale[3] = { 0.4f, 0.4f, 0.4f };
+float torus2_color[3] = { 0.3f, 1.0f, 0.5f };
 
 bool animate = false;
 float anim_speed = 1.0f;
@@ -128,28 +182,16 @@ bool initialize() {
     auto& context = graphics::internal::context;
     GenerateTorus(1.0f, 0.3f, 32, 16, torusVertices, torusIndices);
 
-    const VmaAllocationCreateInfo alloc_info = {
-        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-        .usage = VMA_MEMORY_USAGE_AUTO,
-    };
+    size_t vb_size = sizeof(Vertex) * torusVertices.size();
+    if (!vertex_buffer.create(vb_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) return false;
+    vertex_buffer.upload(torusVertices.data(), vb_size);
 
-    VkBufferCreateInfo vb_info = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = sizeof(Vertex) * torusVertices.size(), .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT };
-    vmaCreateBuffer(context.allocator, &vb_info, &alloc_info, &vk_vertex_buffer, &vk_vertex_buffer_allocation, nullptr);
-    void* data; vmaMapMemory(context.allocator, vk_vertex_buffer_allocation, &data);
-    std::memcpy(data, torusVertices.data(), vb_info.size);
-    vmaUnmapMemory(context.allocator, vk_vertex_buffer_allocation);
-    VkBufferCreateInfo ib_info = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = sizeof(uint32_t) * torusIndices.size(), .usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT };
-    vmaCreateBuffer(context.allocator, &ib_info, &alloc_info, &vk_index_buffer, &vk_index_buffer_allocation, nullptr);
-    vmaMapMemory(context.allocator, vk_index_buffer_allocation, &data);
-    std::memcpy(data, torusIndices.data(), ib_info.size);
-    vmaUnmapMemory(context.allocator, vk_index_buffer_allocation);
+    size_t ib_size = sizeof(uint32_t) * torusIndices.size();
+    if (!index_buffer.create(ib_size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT)) return false;
+    index_buffer.upload(torusIndices.data(), ib_size);
 
-    VkBufferCreateInfo ub_info = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = sizeof(GlobalUniforms), .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT };
-    vmaCreateBuffer(context.allocator, &ub_info, &alloc_info, &vk_uniform_buffer1, &vk_uniform_buffer_allocation1, nullptr);
-    vmaMapMemory(context.allocator, vk_uniform_buffer_allocation1, &mapped_uniform_data1);
-
-    vmaCreateBuffer(context.allocator, &ub_info, &alloc_info, &vk_uniform_buffer2, &vk_uniform_buffer_allocation2, nullptr);
-    vmaMapMemory(context.allocator, vk_uniform_buffer_allocation2, &mapped_uniform_data2);
+    if (!uniform_buffer1.create(sizeof(GlobalUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true)) return false;
+    if (!uniform_buffer2.create(sizeof(GlobalUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true)) return false;
     
     VkDescriptorSetLayoutBinding uboLayoutBinding = { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT };
     VkDescriptorSetLayoutCreateInfo layoutInfo = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = &uboLayoutBinding };
@@ -161,13 +203,13 @@ bool initialize() {
 
     VkDescriptorSetAllocateInfo allocInfo1 = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = descriptor_pool, .descriptorSetCount = 1, .pSetLayouts = &descriptor_set_layout };
     vkAllocateDescriptorSets(context.device, &allocInfo1, &descriptor_set1);
-    VkDescriptorBufferInfo bufferInfo1 = { .buffer = vk_uniform_buffer1, .offset = 0, .range = sizeof(GlobalUniforms) };
+    VkDescriptorBufferInfo bufferInfo1 = { .buffer = uniform_buffer1.buffer, .offset = 0, .range = sizeof(GlobalUniforms) };
     VkWriteDescriptorSet write1 = { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = descriptor_set1, .dstBinding = 0, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &bufferInfo1 };
     vkUpdateDescriptorSets(context.device, 1, &write1, 0, nullptr);
 
     VkDescriptorSetAllocateInfo allocInfo2 = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = descriptor_pool, .descriptorSetCount = 1, .pSetLayouts = &descriptor_set_layout };
     vkAllocateDescriptorSets(context.device, &allocInfo2, &descriptor_set2);
-    VkDescriptorBufferInfo bufferInfo2 = { .buffer = vk_uniform_buffer2, .offset = 0, .range = sizeof(GlobalUniforms) };
+    VkDescriptorBufferInfo bufferInfo2 = { .buffer = uniform_buffer2.buffer, .offset = 0, .range = sizeof(GlobalUniforms) };
     VkWriteDescriptorSet write2 = { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = descriptor_set2, .dstBinding = 0, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &bufferInfo2 };
     vkUpdateDescriptorSets(context.device, 1, &write2, 0, nullptr);
 
@@ -242,47 +284,43 @@ void shutdown() {
         vkDestroyDescriptorSetLayout(context.device, descriptor_set_layout, nullptr);
         descriptor_set_layout = VK_NULL_HANDLE;
     }
-    if (mapped_uniform_data2) {
-        vmaUnmapMemory(context.allocator, vk_uniform_buffer_allocation2);
-        mapped_uniform_data2 = nullptr;
-    }
-    if (vk_uniform_buffer2 != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(context.allocator, vk_uniform_buffer2, vk_uniform_buffer_allocation2);
-    }
-    if (mapped_uniform_data1) {
-        vmaUnmapMemory(context.allocator, vk_uniform_buffer_allocation1);
-        mapped_uniform_data1 = nullptr;
-    }
-    if (vk_uniform_buffer1 != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(context.allocator, vk_uniform_buffer1, vk_uniform_buffer_allocation1);
-    }
-    if (vk_index_buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(context.allocator, vk_index_buffer, vk_index_buffer_allocation);
-    }
-    if (vk_vertex_buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(context.allocator, vk_vertex_buffer, vk_vertex_buffer_allocation);
-    }
+
+    uniform_buffer2.destroy();
+    uniform_buffer1.destroy();
+    index_buffer.destroy();
+    vertex_buffer.destroy();
 }
 
 void update([[maybe_unused]] double time) {
+    auto& context = graphics::internal::context;
+    if (context.swapchain_extent.width == 0 || context.swapchain_extent.height == 0) {
+        return;
+    }
+
     ImGui::Begin("Torus Controls");
     ImGui::Checkbox("Perspective Projection", &is_perspective);
-    ImGui::SliderFloat3("Position", torus_position, -5.0f, 5.0f);
-    ImGui::SliderFloat3("Rotation", torus_rotation, 0.0f, glm::pi<float>() * 2.0f);
-    ImGui::SliderFloat3("Scale", torus_scale, 0.1f, 3.0f);
-    ImGui::ColorEdit3("Base Color", torus_color);
-    ImGui::Separator();
-    ImGui::Text("Animation (Trajectory)");
-    ImGui::Checkbox("Play Animation", &animate);
-    ImGui::SliderFloat("Speed", &anim_speed, 0.1f, 5.0f);
-    ImGui::SliderFloat("Radius", &anim_radius, 0.5f, 3.0f);
+    if (ImGui::CollapsingHeader("Torus 1", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat3("Position 1", torus_position, -5.0f, 5.0f);
+        ImGui::SliderFloat3("Rotation 1", torus_rotation, 0.0f, glm::pi<float>() * 2.0f);
+        ImGui::SliderFloat3("Scale 1", torus_scale, 0.1f, 3.0f);
+        ImGui::ColorEdit3("Color 1", torus_color);
+
+        ImGui::Text("Animation");
+        ImGui::Checkbox("Play Animation", &animate);
+        ImGui::SliderFloat("Speed", &anim_speed, 0.1f, 5.0f);
+        ImGui::SliderFloat("Radius", &anim_radius, 0.5f, 3.0f);
+    }
+    if (ImGui::CollapsingHeader("Torus 2", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat3("Position 2", torus2_position, -5.0f, 5.0f);
+        ImGui::SliderFloat3("Scale 2", torus2_scale, 0.1f, 3.0f);
+        ImGui::ColorEdit3("Color 2", torus2_color);
+    }
     ImGui::End();
 
     if (animate) {
         anim_time += 0.016f * anim_speed;
     }
 
-    auto& context = graphics::internal::context;
     float aspect = (float)context.swapchain_extent.width / (float)context.swapchain_extent.height;
 
     glm::mat4 proj;
@@ -311,20 +349,24 @@ void update([[maybe_unused]] double time) {
     GlobalUniforms ubo1{};
     ubo1.mvp = proj * view * model1;
     ubo1.base_color = glm::vec4(torus_color[0], torus_color[1], torus_color[2], 1.0f);
-    std::memcpy(mapped_uniform_data1, &ubo1, sizeof(ubo1));
+    uniform_buffer1.upload(&ubo1, sizeof(ubo1));
 
     glm::mat4 model2 = glm::mat4(1.0f);
-    model2 = glm::translate(model2, glm::vec3(1.8f, 0.0f, -3.0f));
+    model2 = glm::translate(model2, glm::vec3(torus2_position[0], torus2_position[1], torus2_position[2]));
     model2 = glm::rotate(model2, (float)time * 1.5f, glm::vec3(0.0f, 1.0f, 0.5f));
-    model2 = glm::scale(model2, glm::vec3(0.4f, 0.4f, 0.4f));
+    model2 = glm::scale(model2, glm::vec3(torus2_scale[0], torus2_scale[1], torus2_scale[2]));
 
     GlobalUniforms ubo2{};
     ubo2.mvp = proj * view * model2;
-    ubo2.base_color = glm::vec4(0.3f, 1.0f, 0.5f, 1.0f);
-    std::memcpy(mapped_uniform_data2, &ubo2, sizeof(ubo2));
+    ubo2.base_color = glm::vec4(torus2_color[0], torus2_color[1], torus2_color[2], 1.0f);
+    uniform_buffer2.upload(&ubo2, sizeof(ubo2));
 }
 
 void render(const graphics::internal::FrameData& fd) {
+    if (fd.command_buffer == VK_NULL_HANDLE || fd.framebuffer == VK_NULL_HANDLE) {
+        return;
+    }
+
     auto& context = graphics::internal::context;
 
     if (context.swapchain_extent.width == 0 || context.swapchain_extent.height == 0) {
@@ -372,10 +414,10 @@ void render(const graphics::internal::FrameData& fd) {
     };
     vkCmdSetScissor(fd.command_buffer, 0, 1, &scissor);
 
-    VkBuffer vertexBuffers[] = { vk_vertex_buffer };
+    VkBuffer vertexBuffers[] = { vertex_buffer.buffer };
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(fd.command_buffer, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(fd.command_buffer, vk_index_buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindIndexBuffer(fd.command_buffer, index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
     vkCmdBindDescriptorSets(fd.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_set1, 0, nullptr);
     vkCmdDrawIndexed(fd.command_buffer, static_cast<uint32_t>(torusIndices.size()), 1, 0, 0, 0);
