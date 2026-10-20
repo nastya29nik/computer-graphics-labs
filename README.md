@@ -1,4 +1,6 @@
-# 🌋 Computer Graphics Lab 1: Torus Rendering
+# 🌋 Computer Graphics 
+
+## Lab 1: Torus Rendering
 
 An interactive 3D application built with **Vulkan**, **GLFW**, and **Dear ImGui**.
 
@@ -9,6 +11,20 @@ An interactive 3D application built with **Vulkan**, **GLFW**, and **Dear ImGui*
 - **Complex Trajectory & Animation**: Circular path motion and continuous rotation with adjustable speed, radius, and Play/Pause controls.
 - **Color Manipulation**: Interactive base color blending via `ImGui::ColorEdit3` combined with per-vertex colors in the vertex shader.
 - **Multiple Objects & Descriptor Sets**: Simultaneous rendering of multiple animated objects using distinct `VkDescriptorSet` instances and independent uniform buffers.
+
+---
+
+## Lab 2: Camera & Advanced Lighting
+
+- **Interactive Camera**: Configurable position, target, FOV, and perspective/orthographic projections.
+- **Blinn-Phong Lighting**: Procedural vertex normals, ambient, diffuse, and specular reflections with shininess control.
+- **Multiple Light Casters**:
+  - **Directional Light**: Controllable direction, color, and intensity.
+  - **Point & Spot Lights (SSBO)**: Dynamic arrays in Shader Storage Buffers with **inverse-square attenuation**.
+  - **Soft-edge Spotlights**: Smooth angular falloff using `smoothstep` (inner/outer cutoff angles).
+- **Vulkan Descriptors**: Separated into **Set 0 (Scene UBO + Light SSBOs)** and **Set 1 (Model UBO)**.
+- **Light Visualizers**: Color-matched unlit cubes for light sources and wireframe cones for spotlights via a dedicated line-topology pipeline (`VK_PRIMITIVE_TOPOLOGY_LINE_LIST`).
+- **Scene & Materials**: Reflective ground floor, multiple animated tori, and a toggle for vertex rainbow gradients.
 
 ---
 
